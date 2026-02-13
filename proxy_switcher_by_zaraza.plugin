@@ -1,0 +1,132 @@
+from base_plugin import BasePlugin, MenuItemData, MenuItemType
+from org.telegram.messenger import (
+    MessagesController,
+    SharedConfig,
+    UserConfig,
+    NotificationCenter,
+)
+from org.telegram.tgnet import ConnectionsManager
+
+__id__ = "proxy_switcher_by_zaraza"
+__name__ = "Proxy Switcher By Zaraza"
+__description__ = "Быстрое включение/выключение прокси как в Telegram X"
+__icon__ = "msg2_proxy_on"  # любой подходящий икон-пак из extera
+__author__ = "Community"
+__version__ = "1.0.0"
+__min_version__ = "12.1.1"
+
+
+def _tg_proxy_enabled() -> bool:
+    try:
+        return bool(
+            MessagesController
+            .getGlobalMainSettings()
+            .getBoolean("proxy_enabled", False)
+        )
+    except:
+        return False
+
+
+def _set_tg_proxy_enabled(enabled: bool):
+    enabled = bool(enabled)
+    # 1) сохранить в глобальные настройки
+    try:
+        ed = MessagesController.getGlobalMainSettings().edit()
+        ed.putBoolean("proxy_enabled", enabled)
+        ed.commit()
+    except:
+        pass
+
+    # 2) синхронизировать SharedConfig
+    try:
+        SharedConfig.proxyEnabled = enabled
+        SharedConfig.saveConfig()
+    except:
+        pass
+
+    # 3) прокинуть в ConnectionsManager для всех аккаунтов
+    try:
+        for ac in range(UserConfig.MAX_ACCOUNT_COUNT):
+            try:
+                cm = ConnectionsManager.getInstance(ac)
+                if cm is None:
+                    continue
+                if enabled and SharedConfig.currentProxy is not None:
+                    p = SharedConfig.currentProxy
+                    cm.setProxySettings(
+                        True,
+                        str(p.address),
+                        int(p.port),
+                        str(p.username or ""),
+                        str(p.password or ""),
+                        str(p.secret or ""),
+                    )
+                else:
+                    cm.setProxySettings(False, "", 0, "", "", "")
+            except:
+                pass
+    except:
+        pass
+
+    # 4) уведомить систему Telegram
+    try:
+        NotificationCenter.getGlobalInstance().postNotificationName(
+            NotificationCenter.proxySettingsChanged
+        )
+    except:
+        pass
+
+
+class ProxyTogglePlugin(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self._active = False
+
+    def on_plugin_load(self):
+        self._active = True
+
+        # пункт только в боковом меню (DRAWER_MENU)
+        self.add_menu_item(
+            MenuItemData(
+                menu_type=MenuItemType.DRAWER_MENU,
+                item_id="proxy_toggle_drawer",
+                text=self._get_menu_text(),
+                icon=self._get_menu_icon(),
+                priority=900,
+                on_click=self._on_menu_click,
+            )
+        )
+
+    def on_plugin_unload(self):
+        self._active = False
+
+    def _get_menu_text(self) -> str:
+        enabled = _tg_proxy_enabled()
+        return "Switch proxy" if enabled else "Switch proxy"
+
+    def _get_menu_icon(self) -> str:
+        # можно использовать разные иконки под on/off, если в паке такие есть
+        return "msg2_proxy_on" if _tg_proxy_enabled() else "msg2_proxy_on"
+
+    def _on_menu_click(self, context):
+        if not self._active:
+            return
+        cur = _tg_proxy_enabled()
+        _set_tg_proxy_enabled(not cur)
+
+        # обновляем текст/иконку пункта меню
+        try:
+            self.update_menu_item(
+                "proxy_toggle_drawer",
+                text=self._get_menu_text(),
+                icon=self._get_menu_icon(),
+            )
+        except:
+            pass
+
+
+class Hook(ProxyTogglePlugin):
+    pass
+
+
+__plugin__ = Hook
